@@ -11,7 +11,15 @@ def np_acc_float():
     return processor.column_accumulator(np.array([], dtype=np.float64))
 
 def normalize(branch):
-    return processor.column_accumulator(ak.to_numpy(ak.fill_none(ak.flatten(branch, axis=None), np.nan)))
+    #return processor.column_accumulator(ak.to_numpy(ak.fill_none(ak.flatten(branch, axis=None), np.nan)))
+    return processor.column_accumulator(ak.to_numpy(ak.fill_none(branch, -99)))
+
+def fill_branch(branch, branch_name):
+    try:
+        tofill_branch = normalize(branch[branch_name])
+    except ValueError:
+        tofill_branch = None
+    return tofill_branch
 
 class JetAEProcessor(processor.ProcessorABC):
     def __init__(self):
@@ -33,6 +41,8 @@ class JetAEProcessor(processor.ProcessorABC):
         self._accumulator["FatJet_mass"] = np_acc_float()
         self._accumulator["FatJet_msoftdrop"] = np_acc_float()
         self._accumulator["FatJet_rawFactor"] = np_acc_float()
+        self._accumulator["FatJet_n2b1"] = np_acc_float()
+        self._accumulator["FatJet_n3b1"] = np_acc_float()
         #self._accumulator["FatJet_nBHadrons"] = np_acc_int()
         #self._accumulator["FatJet_nCHadrons"] = np_acc_int()
 
@@ -73,7 +83,30 @@ class JetAEProcessor(processor.ProcessorABC):
         self._accumulator["FatJet_DDX_trackSip3dSig_3"] = np_acc_float()
 
         # variables: subjet 1
-        #self._accumulator["FatJet_subjet1_pt"] = np_acc_float()
+        self._accumulator["FatJet_subjet1_pt"] = np_acc_float()
+        self._accumulator["FatJet_subjet1_eta"] = np_acc_float()
+        self._accumulator["FatJet_subjet1_phi"] = np_acc_float()
+        self._accumulator["FatJet_subjet1_Proba"] = np_acc_float()
+        self._accumulator["FatJet_subjet1_mass"] = np_acc_float()
+        self._accumulator["FatJet_subjet1_tau1"] = np_acc_float()
+        self._accumulator["FatJet_subjet1_tau2"] = np_acc_float()
+        self._accumulator["FatJet_subjet1_tau3"] = np_acc_float()
+        self._accumulator["FatJet_subjet1_tau4"] = np_acc_float()
+        self._accumulator["FatJet_subjet1_n2b1"] = np_acc_float()
+        self._accumulator["FatJet_subjet1_n3b1"] = np_acc_float()
+
+        # variables: subjet 2
+        self._accumulator["FatJet_subjet2_pt"] = np_acc_float()
+        self._accumulator["FatJet_subjet2_eta"] = np_acc_float()
+        self._accumulator["FatJet_subjet2_phi"] = np_acc_float()
+        self._accumulator["FatJet_subjet2_Proba"] = np_acc_float()
+        self._accumulator["FatJet_subjet2_mass"] = np_acc_float()
+        self._accumulator["FatJet_subjet2_tau1"] = np_acc_float()
+        self._accumulator["FatJet_subjet2_tau2"] = np_acc_float()
+        self._accumulator["FatJet_subjet2_tau3"] = np_acc_float()
+        self._accumulator["FatJet_subjet2_tau4"] = np_acc_float()
+        self._accumulator["FatJet_subjet2_n2b1"] = np_acc_float()
+        self._accumulator["FatJet_subjet2_n3b1"] = np_acc_float()
 
         self._accumulator["FatJet_hadronFlavour"] = np_acc_int()
 
@@ -108,26 +141,30 @@ class JetAEProcessor(processor.ProcessorABC):
 
         fatjets = fatjets[selections['all']]
 
+        fatjets = fatjets[ak.num(fatjets) > 0]
         fatjets = fatjets[ak.argsort(fatjets.pt, axis=1)]
         fatjets = ak.firsts(fatjets)
 
         gen_fatjets = fatjets.matched_gen
-        #subjets_1 = fatjets.subjets[:,0]
-        #subjets_2 = fatjets.subjets[:,1]
-
-        #print(len(fatjets.pt))
-        #print(len(subjets_1.pt))
+        subjets_1 = fatjets.subjets[:,0]
+        subjets_2 = fatjets.subjets[:,1]
 
         # fill output branches
         for branch_name in output.keys():
+          # try to fill default branches
           if 'FatJet_gen' in branch_name:
-            output[branch_name] += normalize(gen_fatjets[branch_name.replace('FatJet_gen_', '')])
+            tofill_branch = fill_branch(gen_fatjets, branch_name.replace('FatJet_gen_', ''))
           elif 'FatJet_subjet1' in branch_name:
-            output[branch_name] += normalize(subjets_1[branch_name.replace('FatJet_subjet1_', '')])
+            tofill_branch = fill_branch(subjets_1, branch_name.replace('FatJet_subjet1_', ''))
           elif 'FatJet_subjet2' in branch_name:
-            output[branch_name] += normalize(subjets_2[branch_name.replace('FatJet_subjet2_', '')])
+            tofill_branch = fill_branch(subjets_2, branch_name.replace('FatJet_subjet2_', ''))
           else:
-            output[branch_name] += normalize(fatjets[branch_name.replace('FatJet_', '')])
+            tofill_branch = fill_branch(fatjets, branch_name.replace('FatJet_', ''))
+            
+          if tofill_branch is not None:
+            output[branch_name] += tofill_branch
+
+          # fill new added branches
 
         return output
 
