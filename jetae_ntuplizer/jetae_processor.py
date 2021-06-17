@@ -3,6 +3,7 @@ from coffea import hist, processor
 from coffea.nanoevents import NanoEventsFactory, PFNanoAODSchema
 import numpy as np
 import awkward as ak
+import numba as nb
 
 def np_acc_int():
     return processor.column_accumulator(np.array([], dtype=np.int64))
@@ -20,6 +21,25 @@ def fill_branch(branch, branch_name):
     except ValueError:
         tofill_branch = None
     return tofill_branch
+
+@nb.jit
+def match_jetsv(jet_arrayshape, jetsvs_idx, builder):
+    for i in range(len(jetsvs_idx)):
+        svs = jetsvs_idx[i]
+        builder.begin_list()
+        tmp_jet_idx = []
+        tmp_jetsv_idx = []
+        for j in range(len(svs)):
+            jet_idx = svs[j]
+            tmp_jet_idx.append(jet_idx)
+            tmp_jetsv_idx.append(j)
+        for k in range(len(jet_arrayshape[i])):
+            if k in tmp_jet_idx:
+                builder.integer(tmp_jetsv_idx[tmp_jet_idx.index(k)])
+            else:
+                builder.integer(-1)
+        builder.end_list()
+    return builder
 
 class JetAEProcessor(processor.ProcessorABC):
     def __init__(self):
@@ -110,6 +130,19 @@ class JetAEProcessor(processor.ProcessorABC):
 
         self._accumulator["FatJet_hadronFlavour"] = np_acc_int()
 
+        # variables: fatjet sv
+        self._accumulator["FatJet_sv_costhetasvpv"] = np_acc_float()
+        self._accumulator["FatJet_sv_d3dsig"] = np_acc_float()
+        self._accumulator["FatJet_sv_deltaR"] = np_acc_float()
+        self._accumulator["FatJet_sv_dxysig"] = np_acc_float()
+        self._accumulator["FatJet_sv_enration"] = np_acc_float()
+        self._accumulator["FatJet_sv_mass"] = np_acc_float()
+        self._accumulator["FatJet_sv_normchi2"] = np_acc_float()
+        self._accumulator["FatJet_sv_ntracks"] = np_acc_float()
+        self._accumulator["FatJet_sv_phirel"] = np_acc_float()
+        self._accumulator["FatJet_sv_pt"] = np_acc_float()
+        self._accumulator["FatJet_sv_ptrel"] = np_acc_float()
+
         # variables: generator level
         self._accumulator["FatJet_gen_pt"] = np_acc_float()
         self._accumulator["FatJet_gen_eta"] = np_acc_float()
@@ -127,6 +160,8 @@ class JetAEProcessor(processor.ProcessorABC):
         output = self.accumulator.identity()
 
         fatjets = events.FatJet
+        fatjets_arrayshape = ak.full_like(fatjets.pt, -1)
+        fatjets['svIdx'] = match_jetsv(fatjets_arrayshape, events.FatJetSVs['jetIdx'], ak.ArrayBuilder()).snapshot()
 
         # gen-match
         fatjets = fatjets[~ak.is_none(fatjets.matched_gen)]
@@ -148,23 +183,28 @@ class JetAEProcessor(processor.ProcessorABC):
         gen_fatjets = fatjets.matched_gen
         subjets_1 = fatjets.subjets[:,0]
         subjets_2 = fatjets.subjets[:,1]
+        fatjetsvs = events.FatJetSVs._apply_global_index(fatjets.svIdx)
+   
 
         # fill output branches
+
+        # try to fill default branches
         for branch_name in output.keys():
-          # try to fill default branches
           if 'FatJet_gen' in branch_name:
             tofill_branch = fill_branch(gen_fatjets, branch_name.replace('FatJet_gen_', ''))
           elif 'FatJet_subjet1' in branch_name:
             tofill_branch = fill_branch(subjets_1, branch_name.replace('FatJet_subjet1_', ''))
           elif 'FatJet_subjet2' in branch_name:
             tofill_branch = fill_branch(subjets_2, branch_name.replace('FatJet_subjet2_', ''))
+          elif 'FatJet_sv' in branch_name:
+            tofill_branch = fill_branch(fatjetsvs, branch_name.replace('FatJet_sv_', ''))
           else:
             tofill_branch = fill_branch(fatjets, branch_name.replace('FatJet_', ''))
             
           if tofill_branch is not None:
             output[branch_name] += tofill_branch
 
-          # fill new added branches
+        # fill new added branches
 
         return output
 
@@ -186,7 +226,7 @@ if __name__ == "__main__":
 
     fname = "/eos/user/k/klau/pfnano/QCD_HT500to700_TuneCP5_13TeV-madgraphMLM-pythia8/nano_mc2018_12_a677915bd61e6c9ff968b87c36658d9d_101.root"
     samples = {
-        "Test": [fname]
+        "QCD_HT500to700": [fname]
     }
 
     output = processor.run_uproot_job(
@@ -194,6 +234,7 @@ if __name__ == "__main__":
         treename="Events",
         processor_instance=JetAEProcessor(),
         executor=processor.futures_executor,
+        #executor=processor.iterative_executor,
         executor_args={'workers': args.workers, 
                        'schema': PFNanoAODSchema,
                        },
@@ -203,7 +244,7 @@ if __name__ == "__main__":
     branches = {k: v.value for k, v in output.items()}
     branches_init = {k: v.value.dtype for k, v in output.items()}
 
-    with uproot3.recreate("test.root") as f:
+    with uproot3.recreate(args.outputname.replace('.root','')+'.root') as f:
         f["tree"] = uproot3.newtree(branches_init)
         f["tree"].extend(branches)
 
