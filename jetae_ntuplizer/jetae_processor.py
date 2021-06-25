@@ -23,21 +23,36 @@ def fill_branch(branch, branch_name):
     return tofill_branch
 
 @nb.jit
-def match_jetsv(jet_arrayshape, jetsvs_idx, builder):
-    for i in range(len(jetsvs_idx)):
-        svs = jetsvs_idx[i]
+def match_one_associatedobj(baseobj_arrayshape, associatedobj_idx, builder):
+    for i in range(len(associatedobj_idx)):
+        associatedobj = associatedobj_idx[i]
         builder.begin_list()
-        tmp_jet_idx = []
-        tmp_jetsv_idx = []
-        for j in range(len(svs)):
-            jet_idx = svs[j]
-            tmp_jet_idx.append(jet_idx)
-            tmp_jetsv_idx.append(j)
-        for k in range(len(jet_arrayshape[i])):
-            if k in tmp_jet_idx:
-                builder.integer(tmp_jetsv_idx[tmp_jet_idx.index(k)])
+        tmp_baseobj_idx = []
+        tmp_associatedobj_idx = []
+        for j in range(len(associatedobj)):
+            baseobj_idx = associatedobj[j]
+            tmp_baseobj_idx.append(baseobj_idx)
+            tmp_associatedobj_idx.append(j)
+        for k in range(len(baseobj_arrayshape[i])):
+            if k in tmp_baseobj_idx:
+                builder.integer(tmp_associatedobj_idx[tmp_baseobj_idx.index(k)])
             else:
                 builder.integer(-1)
+        builder.end_list()
+    return builder
+
+@nb.jit
+def match_all_associatedobj(baseobj_arrayshape, associatedobj_idx, builder):
+    for i in range(len(baseobj_arrayshape)):
+        baseobj = baseobj_arrayshape[i]
+        associatedobj = associatedobj_idx[i]
+        builder.begin_list()
+        for j in range(len(baseobj)):
+            builder.begin_list()
+            for k in range(len(associatedobj)):
+                if associatedobj[k] == j:
+                    builder.integer(k)
+            builder.end_list()
         builder.end_list()
     return builder
 
@@ -143,6 +158,8 @@ class JetAEProcessor(processor.ProcessorABC):
         self._accumulator["FatJet_sv_pt"] = np_acc_float()
         self._accumulator["FatJet_sv_ptrel"] = np_acc_float()
 
+        self._accumulator["FatJet_nFatJetPFCands"] = np_acc_int()
+
         # variables: generator level
         self._accumulator["FatJet_gen_pt"] = np_acc_float()
         self._accumulator["FatJet_gen_eta"] = np_acc_float()
@@ -161,7 +178,8 @@ class JetAEProcessor(processor.ProcessorABC):
 
         fatjets = events.FatJet
         fatjets_arrayshape = ak.full_like(fatjets.pt, -1)
-        fatjets['svIdx'] = match_jetsv(fatjets_arrayshape, events.FatJetSVs['jetIdx'], ak.ArrayBuilder()).snapshot()
+        fatjets['svIdx'] = match_one_associatedobj(fatjets_arrayshape, events.FatJetSVs['jetIdx'], ak.ArrayBuilder()).snapshot()
+        fatjets['pfcandIdx'] = match_all_associatedobj(fatjets_arrayshape, events.FatJetPFCands['jetIdx'], ak.ArrayBuilder()).snapshot()
 
         # gen-match
         fatjets = fatjets[~ak.is_none(fatjets.matched_gen)]
@@ -184,7 +202,8 @@ class JetAEProcessor(processor.ProcessorABC):
         subjets_1 = fatjets.subjets[:,0]
         subjets_2 = fatjets.subjets[:,1]
         fatjetsvs = events.FatJetSVs._apply_global_index(fatjets.svIdx)
-   
+        fatjetpfcands = events.FatJetPFCands._apply_global_index(fatjets.pfcandIdx)
+
 
         # fill output branches
 
@@ -205,6 +224,7 @@ class JetAEProcessor(processor.ProcessorABC):
             output[branch_name] += tofill_branch
 
         # fill new added branches
+        output['FatJet_nFatJetPFCands'] = normalize(ak.num(fatjets['pfcandIdx'], axis=-1))
 
         return output
 
