@@ -159,6 +159,8 @@ class JetAEProcessor(processor.ProcessorABC):
         self._accumulator["FatJet_sv_ptrel"] = np_acc_float()
 
         self._accumulator["FatJet_nFatJetPFCands"] = np_acc_int()
+        self._accumulator["FatJet_pfcand_max_deltar"] = np_acc_float()
+        self._accumulator["FatJet_pfcand_mean_deltar"] = np_acc_float()
 
         # variables: generator level
         self._accumulator["FatJet_gen_pt"] = np_acc_float()
@@ -202,8 +204,9 @@ class JetAEProcessor(processor.ProcessorABC):
         subjets_1 = fatjets.subjets[:,0]
         subjets_2 = fatjets.subjets[:,1]
         fatjetsvs = events.FatJetSVs._apply_global_index(fatjets.svIdx)
-        fatjetpfcands = events.FatJetPFCands._apply_global_index(fatjets.pfcandIdx)
-
+        fatjetpfcands = events.PFCands._apply_global_index(events.FatJetPFCands._apply_global_index(fatjets.pfcandIdx).pFCandsIdx)
+        pfcands_max_deltar = ak.max(fatjetpfcands.delta_r(fatjets), axis=-1)
+        pfcands_mean_deltar = ak.mean(fatjetpfcands.delta_r(fatjets), axis=-1)
 
         # fill output branches
 
@@ -225,6 +228,8 @@ class JetAEProcessor(processor.ProcessorABC):
 
         # fill new added branches
         output['FatJet_nFatJetPFCands'] = normalize(ak.num(fatjets['pfcandIdx'], axis=-1))
+        output['FatJet_pfcand_max_deltar'] = normalize(pfcands_max_deltar)
+        output['FatJet_pfcand_mean_deltar'] = normalize(pfcands_mean_deltar)
 
         return output
 
