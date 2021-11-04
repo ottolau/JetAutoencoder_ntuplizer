@@ -4,3 +4,4 @@ source venv/bin/activate
 python3 -m pip install setuptools pip wheel --upgrade
 python3 -m pip install xxhash coffea
 python3 -m pip install zstandard
+python3 -m pip install fast-histogram

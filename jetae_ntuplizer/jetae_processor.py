@@ -4,6 +4,8 @@ from coffea.nanoevents import NanoEventsFactory, PFNanoAODSchema
 import numpy as np
 import awkward as ak
 import numba as nb
+from fast_histogram import histogram1d, histogram2d
+import matplotlib.pyplot as plt
 
 def np_acc_int():
     return processor.column_accumulator(np.array([], dtype=np.int64))
@@ -11,9 +13,12 @@ def np_acc_int():
 def np_acc_float():
     return processor.column_accumulator(np.array([], dtype=np.float64))
 
+def np_acc_image(image_shape):
+    return processor.column_accumulator(np.empty((0,)+image_shape, dtype=np.float64))
+
 def normalize(branch):
     #return processor.column_accumulator(ak.to_numpy(ak.fill_none(ak.flatten(branch, axis=None), np.nan)))
-    return processor.column_accumulator(ak.to_numpy(ak.fill_none(branch, -99)))
+    return processor.column_accumulator(ak.to_numpy(ak.fill_none(branch, 0.0)))
 
 def fill_branch(branch, branch_name):
     try:
@@ -78,6 +83,18 @@ def match_fatjet_pfcand(fatjets, fatjetpfcands, builder):
             builder.end_list()
         builder.end_list()
     return builder
+
+def histo_pfcand(fatjetpfcands, hist_range, bins, pfcnad_vars):
+    output = defaultdict(list)
+    # event loop
+    for i in range(len(fatjetpfcands)):
+        #if i%100 == 0:
+        #    print(i)
+        pfcands = fatjetpfcands[i]
+        for var in pfcnad_vars:
+            output[var].append(histogram2d(ak.to_numpy(pfcands['delta_eta']), ak.to_numpy(pfcands['delta_phi']), range=hist_range, bins=bins, weights=ak.to_numpy(pfcands[var])))
+            output['detframe_{}'.format(var)].append(histogram2d(ak.to_numpy(pfcands['eta']), ak.to_numpy(pfcands['phi']), range=hist_range, bins=bins, weights=ak.to_numpy(pfcands[var])))
+    return {var: np.array(result) for var, result in output.items()}
 
 class JetAEProcessor(processor.ProcessorABC):
     def __init__(self):
@@ -186,12 +203,27 @@ class JetAEProcessor(processor.ProcessorABC):
         self._accumulator["tree"]["FatJet_pfcand_max_delta_r"] = np_acc_float()
         self._accumulator["tree"]["FatJet_pfcand_mean_delta_r"] = np_acc_float()
         self._accumulator["tree"]["FatJet_pfcand_mean_delta_phi"] = np_acc_float()
+        self._accumulator["tree"]["FatJet_pfcand_mean_delta_eta"] = np_acc_float()
 
         # variables: generator level
         self._accumulator["tree"]["FatJet_gen_pt"] = np_acc_float()
         self._accumulator["tree"]["FatJet_gen_eta"] = np_acc_float()
         self._accumulator["tree"]["FatJet_gen_phi"] = np_acc_float()
         self._accumulator["tree"]["FatJet_gen_hadronFlavour"] = np_acc_int()
+
+        # image
+
+        self._accumulator["image"] = processor.dict_accumulator()
+        eta_min, eta_max = -2.0, 2.0
+        phi_min, phi_max = -3.2, 3.2
+        incr = 0.02
+        self._hist_range = [[eta_min, eta_max], [phi_min, phi_max]]
+        self._eta_bins = np.arange(eta_min, eta_max, incr)
+        self._phi_bins = np.arange(phi_min, phi_max, incr)
+        self._image_shape = (self._eta_bins.shape[0], self._phi_bins.shape[0])
+
+        self._accumulator["image"]["PFCands_pt"] = np_acc_image(self._image_shape)
+        self._accumulator["image"]["PFCands_detframe_pt"] = np_acc_image(self._image_shape)
 
     @property
     def accumulator(self):
@@ -221,7 +253,7 @@ class JetAEProcessor(processor.ProcessorABC):
         muons_veto = events.Muon
         muons_veto = muons_veto[muons_veto.pt > 20.0]
         muons_veto = fatjets.nearest(muons_veto)
-        # accept jet that doesn't have an electron nearby
+        # accept jet that doesn't have a muon nearby
         muons_veto_selection = ak.fill_none(fatjets.delta_r(muons_veto) > 0.4, True)
         fatjets = fatjets[muons_veto_selection]
 
@@ -247,8 +279,17 @@ class JetAEProcessor(processor.ProcessorABC):
         subjets_1 = fatjets.subjets[:,0]
         subjets_2 = fatjets.subjets[:,1]
         fatjetsvs = events.FatJetSVs._apply_global_index(fatjets.svIdx)
-        #fatjetpfcands = events.PFCands._apply_global_index(events.FatJetPFCands._apply_global_index(fatjets.pfcandIdx).pFCandsIdx)
+
         fatjetpfcands = events.PFCands._apply_global_index(fatjets.pfcandIdx)
+        fatjetpfcands['delta_phi'] = fatjetpfcands.delta_phi(fatjets)
+        fatjetpfcands['delta_eta'] = fatjetpfcands['eta'] - fatjets['eta']
+
+        # Image part
+
+        pfcnad_vars = ['pt']
+        test = histo_pfcand(fatjetpfcands[:100], self._hist_range, self._image_shape, pfcnad_vars)
+        output["image"]["PFCands_pt"] += processor.column_accumulator(test["pt"])
+        output["image"]["PFCands_detframe_pt"] += processor.column_accumulator(test["detframe_pt"])
 
         #fatjetpfcands = fatjetpfcands[fatjetpfcands.pt > 1.0]  
         #index = 0
@@ -257,7 +298,8 @@ class JetAEProcessor(processor.ProcessorABC):
 
         pfcands_max_delta_r = ak.max(fatjetpfcands.delta_r(fatjets), axis=-1)
         pfcands_mean_delta_r = ak.mean(fatjetpfcands.delta_r(fatjets), axis=-1)
-        pfcands_mean_delta_phi = ak.mean(fatjetpfcands.delta_phi(fatjets), axis=-1)
+        pfcands_mean_delta_phi = ak.mean(fatjetpfcands['delta_phi'], axis=-1)
+        pfcands_mean_delta_eta = ak.mean(fatjetpfcands['delta_eta'], axis=-1)
 
         # fill output branches
 
@@ -278,10 +320,11 @@ class JetAEProcessor(processor.ProcessorABC):
             output["tree"][branch_name] += tofill_branch
 
         # fill new added branches
-        output["tree"]['FatJet_nFatJetPFCands'] = normalize(ak.num(fatjets['pfcandIdx'], axis=-1))
-        output["tree"]['FatJet_pfcand_max_delta_r'] = normalize(pfcands_max_delta_r)
-        output["tree"]['FatJet_pfcand_mean_delta_r'] = normalize(pfcands_mean_delta_r)
-        output["tree"]['FatJet_pfcand_mean_delta_phi'] = normalize(pfcands_mean_delta_phi)
+        output["tree"]['FatJet_nFatJetPFCands'] += normalize(ak.num(fatjets['pfcandIdx'], axis=-1))
+        output["tree"]['FatJet_pfcand_max_delta_r'] += normalize(pfcands_max_delta_r)
+        output["tree"]['FatJet_pfcand_mean_delta_r'] += normalize(pfcands_mean_delta_r)
+        output["tree"]['FatJet_pfcand_mean_delta_phi'] += normalize(pfcands_mean_delta_phi)
+        output["tree"]['FatJet_pfcand_mean_delta_eta'] += normalize(pfcands_mean_delta_eta)
 
         return output
 
@@ -317,6 +360,29 @@ if __name__ == "__main__":
                        },
         chunksize=50000,
     )
+
+    #print(output["image"]["PFCands_pt"].value[0])
+    eta_min, eta_max = -2.0, 2.0
+    phi_min, phi_max = -3.2, 3.2
+    incr = 0.02
+    eta_bins = np.arange(eta_min, eta_max, incr)
+    phi_bins = np.arange(phi_min, phi_max, incr)
+  
+    for i, image in enumerate(output["image"]["PFCands_pt"].value[5: 15]):
+        fig, ax = plt.subplots()
+        plt.imshow(image, origin='lower', interpolation='none', vmin=0, extent=[eta_bins[0], eta_bins[-1], phi_bins[0], phi_bins[-1]])
+        plt.colorbar()
+        ax.set_xlabel('eta')
+        ax.set_ylabel('phi')
+        fig.savefig('PFCands_pt_{}.pdf'.format(i), bbox_inches='tight')
+
+    for i, image in enumerate(output["image"]["PFCands_detframe_pt"].value[5: 15]):
+        fig, ax = plt.subplots()
+        plt.imshow(image, origin='lower', interpolation='none', vmin=0, extent=[eta_bins[0], eta_bins[-1], phi_bins[0], phi_bins[-1]])
+        plt.colorbar()
+        ax.set_xlabel('eta')
+        ax.set_ylabel('phi')
+        fig.savefig('PFCands_detframe_pt_{}.pdf'.format(i), bbox_inches='tight')
 
     branches = {k: v.value for k, v in output["tree"].items()}
     branches_init = {k: v.value.dtype for k, v in output["tree"].items()}
